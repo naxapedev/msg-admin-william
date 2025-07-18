@@ -1,35 +1,21 @@
-// WhatsApp-style Admin Chat Panel (Frontend Only)
-// Responsive Structure: LeftSidebar (filters + search + users/broadcasts), RightChat (chat window)
-
 import { useState, useEffect } from "react";
 import {
   Box,
-  Typography,
+  Drawer,
   List,
   ListItem,
   ListItemText,
-  RadioGroup,
-  FormControlLabel,
-  Radio,
   TextField,
-  Divider,
-  Paper,
   Button,
-  useMediaQuery,
+  Typography,
   InputAdornment,
-  CircularProgress,
   Snackbar,
   Alert,
 } from "@mui/material";
-import { useTheme } from "@mui/material/styles";
 import SearchIcon from "@mui/icons-material/Search";
+import axios from "axios";
 
-const dummyUsers = {
-  driver: ["Driver A", "Driver B", "Driver C"],
-  manager: ["Manager X", "Manager Y"],
-  others: ["Other 1", "Other 2"],
-};
-
+const adminId = "68767ca8b4d9fa5fe49dae23"; // replace with actual
 const broadcastLabels = {
   driver: "📢 Broadcast to Drivers",
   manager: "📢 Broadcast to Managers",
@@ -37,174 +23,241 @@ const broadcastLabels = {
 };
 
 export default function AdminPanel() {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-
   const [filter, setFilter] = useState("driver");
-  const [selectedChat, setSelectedChat] = useState(broadcastLabels["driver"]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filteredUsers, setFilteredUsers] = useState([]);
+
+  const [selectedUser, setSelectedUser] = useState(null); // user object or null
+  const [selectedRole, setSelectedRole] = useState("driver");
+  const chatKey = selectedUser ? selectedUser._id : `broadcast:${selectedRole}`;
+
   const [messages, setMessages] = useState({});
   const [input, setInput] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
   const [status, setStatus] = useState(null);
 
-  const filteredUserList = searchTerm.trim()
-    ? dummyUsers[filter].filter((user) =>
-        user.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    : [];
+  // Load either broadcast or conversation
+  useEffect(() => {
+    const load = async () => {
+      if (selectedUser) {
+        // 1-on-1 conversation
 
-  const displayList = searchTerm.trim()
-    ? filteredUserList
-    : [broadcastLabels[filter]];
+        const res = await axios.get(
+          `http://localhost:4000/api/v1/messages/con?userA=${adminId}&userB=${selectedUser._id}`
+        );
 
-  const currentChatMessages = messages[selectedChat] || [];
+        const data = res.data.data || [];
+        setMessages((prev) => ({
+          ...prev,
+          [chatKey]: data.map((m) => ({
+            sender: m.sender.id === adminId ? "Admin" : m.sender.role,
+            text: m.text,
+            time: new Date(m.createdAt).toLocaleTimeString(),
+          })),
+        }));
+      } else {
+        // broadcast history
+        const res = await axios.get(
+          `http://localhost:4000/api/v1/messages/broad?role=${selectedRole}`
+        );
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    const newMessage = {
-      sender: "Admin",
-      text: input,
-      time: new Date().toLocaleTimeString(),
+        const data = res.data.data || [];
+        setMessages((prev) => ({
+          ...prev,
+          [chatKey]: data.reverse().map((m) => ({
+            sender: m.createdBy.role === "admin" ? "Admin" : m.createdBy.role,
+            text: m.text,
+            time: new Date(m.createdAt).toLocaleTimeString(),
+          })),
+        }));
+      }
     };
-    setMessages((prev) => ({
-      ...prev,
-      [selectedChat]: [...(prev[selectedChat] || []), newMessage],
-    }));
-    setInput("");
-    setStatus("sent");
+    load().catch(console.error);
+  }, [chatKey, selectedUser, selectedRole]);
+
+  // Search users on input
+  useEffect(() => {
+    if (!searchTerm.trim()) {
+      setFilteredUsers([]);
+      return;
+    }
+    axios
+      .get(`http://localhost:4000/api/v1/messages/search`, {
+        params: { role: filter, name: searchTerm },
+      })
+      .then((res) => {
+        setFilteredUsers(res.data.users || []);
+        console.log(filteredUsers);
+        
+      })
+      .catch(console.error);
+  }, [searchTerm, filter]);
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    try {
+      if (selectedUser) {
+        // Send one-on-one
+
+        await axios.post(`http://localhost:4000/api/v1/messages/send`, {
+          senderId: adminId,
+          senderRole: "admin",
+          receiverRole: selectedRole,
+          receiverId: selectedUser._id,
+          type: "text",
+          text: input.trim(),
+        });
+      } else {
+        // Broadcast message
+        await axios.post(`http://localhost:4000/api/v1/messages/broadcast`, {
+          role: selectedRole,
+          type: "text",
+          text: input.trim(),
+        });
+      }
+      const newMsg = {
+        sender: "Admin",
+        text: input,
+        time: new Date().toLocaleTimeString(),
+      };
+      setMessages((prev) => ({
+        ...prev,
+        [chatKey]: [...(prev[chatKey] || []), newMsg],
+      }));
+      setInput("");
+      setStatus("sent");
+    } catch (err) {
+      console.error(err);
+      setStatus("error");
+    }
   };
 
-  const handleClose = () => setStatus(null);
-
   return (
-    <Box
-      display="flex"
-      flexDirection={isMobile ? "column" : "row"}
-      height="100vh"
-    >
-      {/* LEFT SIDEBAR */}
-      <Paper
-        sx={{
-          width: isMobile ? "100%" : 300,
-          p: 2,
-          borderRight: isMobile ? "none" : "1px solid #ccc",
-          borderBottom: isMobile ? "1px solid #ccc" : "none",
-          overflowY: "auto",
-        }}
-        square
-      >
-        <Typography variant="h6" mb={2}>
-          Filters
-        </Typography>
-        <RadioGroup
-          row={!isMobile}
-          value={filter}
-          onChange={(e) => {
-            const newFilter = e.target.value;
-            setFilter(newFilter);
-            setSelectedChat(broadcastLabels[newFilter]);
-            setSearchTerm("");
-          }}
-        >
-          <FormControlLabel value="driver" control={<Radio />} label="Drivers" />
-          <FormControlLabel value="manager" control={<Radio />} label="Managers" />
-          <FormControlLabel value="others" control={<Radio />} label="Others" />
-        </RadioGroup>
-
-        <TextField
-          placeholder="Search user..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          fullWidth
-          margin="normal"
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-          }}
-        />
-
-        <Divider sx={{ my: 2 }} />
-
-        <Typography variant="subtitle1" mb={1}>
-          Chats
-        </Typography>
-        <List>
-          {displayList.map((name) => (
-            <ListItem
-              button
-              key={name}
-              selected={selectedChat === name}
-              onClick={() => setSelectedChat(name)}
-            >
-              <ListItemText primary={name} />
-            </ListItem>
-          ))}
-        </List>
-      </Paper>
-
-      {/* RIGHT CHAT WINDOW */}
-      <Box flex={1} display="flex" flexDirection="column" p={2}>
-        <Typography variant="h6" gutterBottom>
-          Chat with: {selectedChat}
-        </Typography>
-        <Divider sx={{ mb: 2 }} />
-
-        <Box
-          flex={1}
-          sx={{ overflowY: "auto", mb: 2, pr: 1 }}
-          display="flex"
-          flexDirection="column"
-          gap={1.5}
-        >
-          {currentChatMessages.length === 0 ? (
-            <Typography color="text.secondary">
-              No messages yet.
-            </Typography>
-          ) : (
-            currentChatMessages.map((msg, i) => (
-              <Box
-                key={i}
-                alignSelf={msg.sender === "Admin" ? "flex-end" : "flex-start"}
-                bgcolor={msg.sender === "Admin" ? "#DCF8C6" : "#F1F0F0"}
-                px={2}
-                py={1}
-                borderRadius={2}
-                maxWidth="80%"
+    <Box display="flex" height="100vh">
+      <Drawer variant="permanent" sx={{ width: 300 }}>
+        <Box p={2}>
+          {/* Role filter */}
+          <Box mb={2} display="flex" justifyContent="space-between">
+            {["driver", "manager", "others"].map((r) => (
+              <Button
+                key={r}
+                variant={filter === r ? "contained" : "outlined"}
+                onClick={() => {
+                  setFilter(r);
+                  setSelectedUser(null);
+                  setSelectedRole(r);
+                  setSearchTerm("");
+                }}
               >
-                <Typography variant="body2">{msg.text}</Typography>
-                <Typography variant="caption" display="block" align="right">
-                  {msg.time}
-                </Typography>
-              </Box>
-            ))
-          )}
-        </Box>
-
-        <Box display="flex" gap={1} flexDirection={isMobile ? "column" : "row"}>
+                {r}
+              </Button>
+            ))}
+          </Box>
+          {/* Search input */}
           <TextField
             fullWidth
+            placeholder="Search users..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              ),
+            }}
+          />
+          {/* List */}
+          <List>
+            {searchTerm.trim() ? (
+              filteredUsers.map((u) => (
+                <ListItem
+                  key={u._id}
+                  button
+                  selected={selectedUser?._id === u._id}
+                  onClick={() => {
+                    setSelectedUser(u);
+                    setSelectedRole(u.role);
+                  }}
+                >
+                  <img
+                    src={u.avatar_url}
+                    alt="a"
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 15,
+                      marginRight: 10,
+                    }}
+                  />
+                  <ListItemText primary={u.name} />
+                </ListItem>
+              ))
+            ) : (
+              <ListItem
+                button
+                selected={!selectedUser && chatKey.startsWith("broadcast")}
+                onClick={() => {
+                  setSelectedUser(null);
+                  setSelectedRole(filter);
+                }}
+              >
+                <ListItemText primary={broadcastLabels[filter]} />
+              </ListItem>
+            )}
+          </List>
+        </Box>
+      </Drawer>
+
+      {/* Chat Window */}
+      <Box flexGrow={1} p={2}>
+        <Typography variant="h6" gutterBottom>
+          {selectedUser ? selectedUser.name : broadcastLabels[selectedRole]}
+        </Typography>
+        <Box flex={1} border={1} borderRadius={1} p={2} overflow="auto">
+          {(messages[chatKey] || []).map((m, i) => (
+            <Box
+              key={i}
+              display="flex"
+              justifyContent={m.sender === "Admin" ? "flex-end" : "flex-start"}
+              mb={1}
+            >
+              <Box
+                bgcolor={m.sender === "Admin" ? "#1976d2" : "#ccc"}
+                color="#fff"
+                p={1}
+                borderRadius={1}
+                maxWidth="60%"
+              >
+                <Typography variant="body2">{m.text}</Typography>
+                <Typography variant="caption" align="right" display="block">
+                  {m.time}
+                </Typography>
+              </Box>
+            </Box>
+          ))}
+        </Box>
+        <Box mt={2} display="flex">
+          <TextField
+            flex={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type a message..."
-            variant="outlined"
+            placeholder="Type a message"
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
           />
-          <Button variant="contained" onClick={handleSend} fullWidth={isMobile}>
+          <Button variant="contained" onClick={handleSend} sx={{ ml: 1 }}>
             Send
           </Button>
         </Box>
       </Box>
 
       <Snackbar
-        open={status === "sent"}
+        open={Boolean(status)}
         autoHideDuration={3000}
-        onClose={handleClose}
+        onClose={() => setStatus(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert severity="success" onClose={handleClose}>
-          Broadcast sent!
+        <Alert severity={status === "sent" ? "success" : "error"}>
+          {status === "sent" ? "Sent!" : "Failed"}
         </Alert>
       </Snackbar>
     </Box>
